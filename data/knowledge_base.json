@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "topic": "Leave Policy",
+    "content": "Employees are entitled to 18 paid leaves per calendar year. Leave requests up to 2 days can be self-approved and logged. Requests longer than 2 days require manager approval before being finalized."
+  },
+  {
+    "id": 2,
+    "topic": "Sick Leave",
+    "content": "Sick leave is capped at 6 days per year and does not require advance notice, but must be logged within 24 hours of returning to work."
+  },
+  {
+    "id": 3,
+    "topic": "IT Hardware Support",
+    "content": "Hardware issues such as slow laptops, broken screens, or peripheral failures should be reported by creating a support ticket. Severity is classified as low, medium, or high based on impact on work."
+  },
+  {
+    "id": 4,
+    "topic": "Software Installation",
+    "content": "Employees can request installation of approved software via a support ticket. Unapproved or licensed third-party software requires manager sign-off before a ticket can be created."
+  },
+  {
+    "id": 5,
+    "topic": "Password Reset",
+    "content": "Password resets are considered a critical security action. They require identity verification and explicit human approval before being executed, since they affect account access."
+  },
+  {
+    "id": 6,
+    "topic": "Account Deactivation",
+    "content": "Deactivating or deleting an employee account is a critical, irreversible action. It always requires explicit human approval regardless of who requests it."
+  },
+  {
+    "id": 7,
+    "topic": "Escalation Policy",
+    "content": "If an issue cannot be resolved through standard tickets (e.g. repeated hardware failure, policy disputes, harassment concerns), it should be escalated directly to HR for manual review."
+  },
+  {
+    "id": 8,
+    "topic": "Work From Home Policy",
+    "content": "Employees may work from home up to 2 days per week without approval. More than 2 days per week requires manager approval logged as an exception request."
+  },
+  {
+    "id": 9,
+    "topic": "Reimbursement Policy",
+    "content": "Travel and equipment reimbursements under 2000 INR can be auto-approved by creating a reimbursement ticket. Amounts above that require manager approval."
+  },
+  {
+    "id": 10,
+    "topic": "Leave Balance Check",
+    "content": "Employees can check their remaining leave balance at any time by querying the HR system; this is a read-only, non-critical action."
+  }
+]
