@@ -32,13 +32,42 @@ def create_ticket(issue: str, severity: str = "medium", **kwargs) -> dict:
 
 
 def check_leave_balance(employee_id: str = "unknown", **kwargs) -> dict:
-    # Simulated balance — in a real system this would query an HRMS.
-    balance = random.randint(2, 18)
+    from knowledge.db_setup import get_employee  # local import avoids startup cost when unused
+
+    record = get_employee(employee_id)
+    if record is None:
+        return {
+            "status": "not_found",
+            "message": f"No employee record found for {employee_id}.",
+        }
     return {
         "status": "success",
         "employee_id": employee_id,
-        "balance_days": balance,
-        "message": f"Employee {employee_id} has {balance} leave days remaining.",
+        "balance_days": record["leave_balance"],
+        "message": f"Employee {employee_id} ({record['name']}) has {record['leave_balance']} leave days remaining.",
+    }
+
+
+def lookup_similar_tickets(issue: str = "", **kwargs) -> dict:
+    """Searches the CSV ticket-history knowledge source for similar past issues."""
+    import csv
+    import os
+
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "tickets_history.csv")
+    matches = []
+    keywords = set(issue.lower().split())
+    with open(csv_path, "r", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            row_words = set(row["issue"].lower().split())
+            if keywords & row_words:
+                matches.append(f"{row['ticket_id']}: {row['issue']} -> {row['resolved_notes']}")
+
+    if not matches:
+        return {"status": "no_match", "message": "No similar past tickets found."}
+    return {
+        "status": "success",
+        "matches": matches[:3],
+        "message": "Similar past tickets found: " + " | ".join(matches[:3]),
     }
 
 
@@ -102,6 +131,7 @@ ACTIONS = {
     "reset_password": reset_password,
     "deactivate_account": deactivate_account,
     "escalate_to_hr": escalate_to_hr,
+    "lookup_similar_tickets": lookup_similar_tickets,
     "answer_only": answer_only,
 }
 

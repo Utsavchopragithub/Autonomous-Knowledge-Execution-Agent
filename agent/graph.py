@@ -1,224 +1,157 @@
 """
 agent/graph.py
 
-The actual "agent" — a LangGraph state machine with 5 nodes:
+The upgraded agent flow (LangGraph state machine):
 
-  retrieve_node   -> perceive: pull relevant facts from the knowledge base
-  reason_node     -> reason: LLM decides intent + action + params + why
-  approval_node   -> safety: pause for a human if the action is critical
-  execute_node    -> act: actually run the chosen Python action function
-  explain_node    -> explain: build the final answer + write the audit log
+  retrieve_node   -> pulls from ALL 4 knowledge sources (hybrid search)
+  recall_node     -> semantic long-term memory recall (not just "last 3")
+  plan_node       -> LLM plans one or more steps, flags confidence/conflicts
+  route_node      -> if confidence is low / a conflict was flagged, escalate
+                      to a human instead of guessing; otherwise proceed
+  escalate_node    -> auto-files an HR escalation with the reason attached
+  execute_node    -> runs the plan (executor.py: parallel batches + human
+                      approval gate for critical steps)
+  explain_node    -> builds the final explanation, step by step
 
-No step uses hardcoded if/else rules to answer the user's question — the
-LLM (Gemini, free tier) does all the reasoning and decides which action to
-call. Python code only executes what the LLM decided and enforces the
-safety gate for critical actions.
+Nothing here hardcodes WHAT to do -- the LLM (Gemini) decides the plan;
+Python only retrieves data, enforces the safety gate, executes whatever
+was decided, and logs everything.
 """
 
-import json
-import os
-from typing import TypedDict, Optional
+from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from knowledge.retriever import KnowledgeRetriever
-from actions.actions import ACTIONS, CRITICAL_ACTIONS
-from memory.audit_log import log_interaction, get_recent_interactions
-
-# ---------------------------------------------------------------------------
-# LLM setup — Google Gemini free tier.
-# Get a free key (no credit card) at https://aistudio.google.com/app/apikey
-# Model: gemini-3.1-flash-lite is the current stable, cost-free-tier-friendly
-# model as of late 2026. If Google renames/retires it, swap the string below
-# for whatever shows as "stable" on https://ai.google.dev/gemini-api/docs/models
-# ---------------------------------------------------------------------------
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-
-llm = ChatGoogleGenerativeAI(
-    model=GEMINI_MODEL,
-    temperature=0,
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-)
+from memory.long_term import LongTermMemory
+from memory.audit_log import new_plan_id, log_step
+from agent.planner import build_plan
+from agent.executor import execute_plan
+from actions.actions import escalate_to_hr
 
 retriever = KnowledgeRetriever()
-
-AVAILABLE_ACTIONS_DESC = """
-- create_ticket(issue, severity): file an IT/support ticket for a hardware/software problem
-- check_leave_balance(employee_id): look up how many leave days an employee has left
-- request_leave(employee_id, days): submit a leave request
-- request_wfh_exception(employee_id, days): request extra work-from-home days
-- reset_password(employee_id): CRITICAL — resets an employee's password
-- deactivate_account(employee_id): CRITICAL — deactivates an employee account
-- escalate_to_hr(issue): send an unresolved/sensitive issue to HR
-- answer_only(): use this when the query is purely informational and needs no action
-"""
+long_term_memory = LongTermMemory()
 
 
 class AgentState(TypedDict):
     query: str
     employee_id: str
     retrieved: list
-    intent: str
-    action_name: str
-    params: dict
-    reasoning: str
-    is_critical: bool
-    approved: bool
-    result: dict
+    memory_snippets: list
+    plan: dict
+    plan_id: str
+    step_outcomes: list
     final_answer: str
 
 
-# --------------------------- Nodes ---------------------------------------
-
 def retrieve_node(state: AgentState) -> AgentState:
-    results = retriever.retrieve(state["query"], top_k=3)
-    state["retrieved"] = results
+    state["retrieved"] = retriever.retrieve(state["query"], top_k=5)
     return state
 
 
-def reason_node(state: AgentState) -> AgentState:
-    context_block = "\n".join(f"- ({r['topic']}) {r['content']}" for r in state["retrieved"])
-    history = get_recent_interactions(limit=3)
-    history_block = "\n".join(f"- Q: {q} -> action: {a} -> result: {res}" for q, a, res in history) or "None"
+def recall_node(state: AgentState) -> AgentState:
+    state["memory_snippets"] = long_term_memory.recall(state["query"], top_k=3)
+    return state
 
-    prompt = f"""You are an internal Helpdesk Agent. You must decide what to do about an
-employee's request using ONLY the internal knowledge provided below. Do not
-invent policies that are not in the knowledge base.
 
-Internal knowledge relevant to this query:
-{context_block}
-
-Recent past interactions (for context/continuity):
-{history_block}
-
-Available actions you may choose from:
-{AVAILABLE_ACTIONS_DESC}
-
-Employee query: "{state['query']}"
-Employee ID: {state.get('employee_id', 'unknown')}
-
-Think about the employee's intent, then decide the single best action.
-Respond with ONLY a valid JSON object, no markdown, no extra text, in this
-exact shape:
-{{
-  "intent": "<one short phrase describing what the user wants>",
-  "action": "<one of the action names above, exactly as written>",
-  "params": {{"...": "..."}},
-  "reasoning": "<2-3 sentences explaining why this action and not another>",
-  "is_critical": true or false
-}}
-"""
-
-    response = llm.invoke(prompt)
-    content = response.content
-    if isinstance(content, list):
-        raw = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in content
-        ).strip()
-    else:
-        raw = str(content).strip()
-
-    # Be defensive: strip accidental markdown code fences if the model adds them
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        raw = raw.replace("json\n", "", 1)
-
-    try:
-        decision = json.loads(raw)
-    except json.JSONDecodeError:
-        # Fallback so the graph never crashes on a malformed LLM response
-        decision = {
-            "intent": "unclear",
-            "action": "answer_only",
-            "params": {},
-            "reasoning": f"Could not parse model output, defaulting to no action. Raw: {raw[:200]}",
-            "is_critical": False,
-        }
-
-    state["intent"] = decision.get("intent", "")
-    state["action_name"] = decision.get("action", "answer_only")
-    state["params"] = decision.get("params", {}) or {}
-    state["reasoning"] = decision.get("reasoning", "")
-    state["is_critical"] = bool(decision.get("is_critical", False)) or (
-        decision.get("action") in CRITICAL_ACTIONS
+def plan_node(state: AgentState) -> AgentState:
+    state["plan"] = build_plan(
+        query=state["query"],
+        employee_id=state.get("employee_id", "unknown"),
+        retrieved=state["retrieved"],
+        memory_snippets=state["memory_snippets"],
     )
-
-    # Make sure the employee_id is available to the action even if the LLM omits it
-    state["params"].setdefault("employee_id", state.get("employee_id", "unknown"))
+    state["plan_id"] = new_plan_id()
     return state
 
 
-def approval_node(state: AgentState) -> AgentState:
+def route_after_plan(state: AgentState) -> str:
+    plan = state["plan"]
+    if plan.get("confidence") == "low" or plan.get("conflicts_or_gaps"):
+        return "escalate_node"
+    if not plan.get("steps"):
+        return "escalate_node"
+    return "execute_node"
+
+
+def escalate_node(state: AgentState) -> AgentState:
+    reason = state["plan"].get("conflicts_or_gaps") or "Low confidence in available knowledge to safely act."
+    result = escalate_to_hr(issue=f"Query: '{state['query']}'. Reason: {reason}")
+    log_step(
+        state["plan_id"], state["query"], "escalation", "Escalated due to low confidence / conflicting info",
+        "escalate_to_hr", reason, False, True, False, result,
+    )
+    state["step_outcomes"] = [{
+        "step": {"id": "escalation", "description": "Escalated to HR", "action": "escalate_to_hr", "reasoning": reason},
+        "result": result,
+        "approved": True,
+        "parallel": False,
+    }]
+    return state
+
+
+def _cli_approve(step: dict) -> bool:
     print("\n[HUMAN APPROVAL REQUIRED]")
-    print(f"  Action proposed : {state['action_name']}")
-    print(f"  Parameters      : {state['params']}")
-    print(f"  Agent reasoning : {state['reasoning']}")
+    print(f"  Step            : {step.get('description')}")
+    print(f"  Action proposed : {step['action']}")
+    print(f"  Parameters      : {step['params']}")
+    print(f"  Reasoning       : {step.get('reasoning', '')}")
     answer = input("  Approve this action? (y/n): ").strip().lower()
-    state["approved"] = answer == "y"
-    return state
+    return answer == "y"
 
 
 def execute_node(state: AgentState) -> AgentState:
-    if state["is_critical"] and not state.get("approved", False):
-        state["result"] = {
-            "status": "rejected",
-            "message": "Action was NOT executed — critical action was not approved by a human.",
-        }
-        return state
-
-    action_fn = ACTIONS.get(state["action_name"], ACTIONS["answer_only"])
-    try:
-        state["result"] = action_fn(**state["params"])
-    except TypeError as e:
-        state["result"] = {"status": "error", "message": f"Action failed due to bad parameters: {e}"}
+    state["step_outcomes"] = execute_plan(
+        plan=state["plan"],
+        plan_id=state["plan_id"],
+        query=state["query"],
+        approve_fn=_cli_approve,
+    )
     return state
 
 
 def explain_node(state: AgentState) -> AgentState:
-    final_answer = (
-        f"Intent understood: {state['intent']}\n"
-        f"Reasoning: {state['reasoning']}\n"
-        f"Action taken: {state['action_name']}\n"
-        f"Result: {state['result'].get('message', state['result'])}"
-    )
-    state["final_answer"] = final_answer
+    plan = state["plan"]
+    lines = []
 
-    log_interaction(
-        query=state["query"],
-        intent=state["intent"],
-        action_name=state["action_name"],
-        reasoning=state["reasoning"],
-        was_critical=state["is_critical"],
-        approved_by_human=state.get("approved", not state["is_critical"]),
-        result=state["result"],
-    )
+    if plan.get("confidence") in ("medium", "low") or plan.get("conflicts_or_gaps"):
+        lines.append(f"Confidence: {plan.get('confidence', 'unknown')}")
+    if plan.get("conflicts_or_gaps"):
+        lines.append(f"Note: {plan['conflicts_or_gaps']}")
+
+    for outcome in state["step_outcomes"]:
+        step = outcome["step"]
+        result = outcome["result"]
+        tag = " [ran in parallel]" if outcome.get("parallel") else ""
+        lines.append(
+            f"\nStep {step.get('id', '?')}{tag}: {step.get('description', step.get('action'))}\n"
+            f"  Reasoning: {step.get('reasoning', '')}\n"
+            f"  Action: {step.get('action')}\n"
+            f"  Result: {result.get('message', result)}"
+        )
+
+    state["final_answer"] = "\n".join(lines)
     return state
-
-
-# --------------------------- Graph wiring ---------------------------------
-
-def route_after_reason(state: AgentState) -> str:
-    return "approval_node" if state["is_critical"] else "execute_node"
 
 
 def build_agent():
     graph = StateGraph(AgentState)
 
     graph.add_node("retrieve_node", retrieve_node)
-    graph.add_node("reason_node", reason_node)
-    graph.add_node("approval_node", approval_node)
+    graph.add_node("recall_node", recall_node)
+    graph.add_node("plan_node", plan_node)
+    graph.add_node("escalate_node", escalate_node)
     graph.add_node("execute_node", execute_node)
     graph.add_node("explain_node", explain_node)
 
     graph.set_entry_point("retrieve_node")
-    graph.add_edge("retrieve_node", "reason_node")
-    graph.add_conditional_edges("reason_node", route_after_reason, {
-        "approval_node": "approval_node",
+    graph.add_edge("retrieve_node", "recall_node")
+    graph.add_edge("recall_node", "plan_node")
+    graph.add_conditional_edges("plan_node", route_after_plan, {
+        "escalate_node": "escalate_node",
         "execute_node": "execute_node",
     })
-    graph.add_edge("approval_node", "execute_node")
+    graph.add_edge("escalate_node", "explain_node")
     graph.add_edge("execute_node", "explain_node")
     graph.add_edge("explain_node", END)
 

@@ -1,0 +1,6 @@
+[
+  {"employee_id": "EMP001", "name": "Utsav Sharma", "department": "Engineering", "leave_balance": 9},
+  {"employee_id": "EMP002", "name": "Priya Nair", "department": "HR", "leave_balance": 15},
+  {"employee_id": "EMP003", "name": "Rohit Verma", "department": "Sales", "leave_balance": 3},
+  {"employee_id": "EMP004", "name": "Ananya Gupta", "department": "Engineering", "leave_balance": 18}
+]

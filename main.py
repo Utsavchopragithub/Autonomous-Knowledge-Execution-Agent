@@ -1,11 +1,11 @@
 """
 main.py
 
-Entry point. Run with:  python main.py
+Entry point. Run with:  python3 main.py
 
-Loads GEMINI_API_KEY from .env, builds the LangGraph agent, and runs a
-simple CLI loop so you can talk to the Helpdesk Agent and watch it
-retrieve -> reason -> (approve) -> execute -> explain for each query.
+Loads GEMINI_API_KEY from .env, builds the LangGraph agent (retrieve ->
+recall memory -> plan -> escalate-or-execute -> explain), and runs a CLI
+loop so you can talk to the Helpdesk Agent.
 """
 
 import os
@@ -21,12 +21,13 @@ if not os.getenv("GEMINI_API_KEY"):
 
 from agent.graph import build_agent
 
+print("Setting up knowledge sources and agent (first run downloads a small local model)...")
 agent = build_agent()
 
-print("=" * 60)
+print("=" * 70)
 print(" Autonomous Knowledge Execution Agent — Internal Helpdesk")
 print(" Type your request (or 'exit' to quit)")
-print("=" * 60)
+print("=" * 70)
 
 employee_id = input("Enter your employee ID (or press Enter for 'EMP001'): ").strip() or "EMP001"
 
@@ -42,13 +43,10 @@ while True:
         "query": query,
         "employee_id": employee_id,
         "retrieved": [],
-        "intent": "",
-        "action_name": "",
-        "params": {},
-        "reasoning": "",
-        "is_critical": False,
-        "approved": False,
-        "result": {},
+        "memory_snippets": [],
+        "plan": {},
+        "plan_id": "",
+        "step_outcomes": [],
         "final_answer": "",
     }
 

@@ -1,0 +1,8 @@
+ticket_id,issue,severity,status,resolved_notes
+TCK-1001,laptop overheating and shutting down,high,resolved,replaced thermal paste and cleaned fan; issue did not recur
+TCK-1002,slow laptop performance after update,medium,resolved,cleared cache and disabled unnecessary startup apps
+TCK-1003,cannot connect to office wifi,low,resolved,reset network adapter settings
+TCK-1004,monitor flickering intermittently,medium,resolved,replaced HDMI cable
+TCK-1005,software installation request denied,low,resolved,manager approval obtained then installed
+TCK-1006,laptop very slow during video calls,medium,resolved,recommended closing background apps and upgrading RAM
+TCK-1007,forgotten password lockout,medium,resolved,identity verified then password reset by IT admin
