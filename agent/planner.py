@@ -25,8 +25,8 @@ AVAILABLE_ACTIONS_DESC = """
 - check_leave_balance(employee_id): look up an employee's leave balance from the employee database
 - request_leave(employee_id, days): submit a leave request
 - request_wfh_exception(employee_id, days): request extra work-from-home days
-- reset_password(employee_id): CRITICAL - resets a password, needs human approval
-- deactivate_account(employee_id): CRITICAL - deactivates an account, needs human approval
+- reset_password(employee_id): CRITICAL - resets a password. Choose this when the employee asks for a reset; the system itself pauses and asks a human to approve before it runs.
+- deactivate_account(employee_id): CRITICAL - deactivates an account. Choose this when asked to deactivate; the system itself pauses and asks a human to approve before it runs.
 - escalate_to_hr(issue): send an issue to HR for manual review
 - lookup_similar_tickets(issue): search past ticket history (CSV records) for similar resolved issues
 - answer_only(): use when the query is purely informational and needs no action
@@ -64,6 +64,9 @@ Do the following:
    the action name (from the list above), its params, reasoning, whether it
    is critical, and a "depends_on" list of step ids it must wait for (empty
    list if it can run immediately / in parallel with other independent steps).
+5. Do NOT swap a critical action for a safer one (for example a ticket) just 
+   because it is critical. Human approval is enforced by the system after you
+   plan, so choose the action that actually fulfils the request and set is_critical to true.
 
 Respond with ONLY valid JSON, no markdown, in this exact shape:
 {{
